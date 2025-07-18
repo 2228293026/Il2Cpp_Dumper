@@ -1,0 +1,109 @@
+<?xml version='1.0' encoding='utf-8'?>
+<manifest
+    package="com.DefaultCompany.Myproject"
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sharedUserId="ther.wmw">
+
+    <!-- 完全的网络访问权限 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- MANAGE_EXTERNAL_STORAGE -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+
+    <!-- 修改或删除 SD 卡中的内容 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+
+    <!-- 读取存储卡中的内容 -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <uses-sdk
+    android:minSdkVersion="23"
+    android:targetSdkVersion="33" />   <!-- 或你项目需要的 target -->
+    <supports-screens
+        android:anyDensity="true"
+        android:smallScreens="true"
+        android:normalScreens="true"
+        android:largeScreens="true"
+        android:xlargeScreens="true"/>
+
+    <uses-permission android:name="android.permission.INTERNET"/>
+
+    <uses-feature android:glEsVersion="0x30000"/>
+
+    <uses-feature
+        android:name="android.hardware.vulkan.version"
+        android:required="false"/>
+
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false"/>
+
+    <uses-feature
+        android:name="android.hardware.touchscreen.multitouch"
+        android:required="false"/>
+
+    <uses-feature
+        android:name="android.hardware.touchscreen.multitouch.distinct"
+        android:required="false"/>
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/app_icon"
+        android:debuggable="true"
+        android:extractNativeLibs="true">
+
+        <meta-data
+            android:name="unity.splash-mode"
+            android:value="0"/>
+
+        <meta-data
+            android:name="unity.splash-enable"
+            android:value="false"/>
+
+        <meta-data
+            android:name="unity.launch-fullscreen"
+            android:value="true"/>
+
+        <meta-data
+            android:name="unity.render-outside-safearea"
+            android:value="true"/>
+
+        <meta-data
+            android:name="notch.config"
+            android:value="portrait|landscape"/>
+
+        <meta-data
+            android:name="unity.auto-report-fully-drawn"
+            android:value="true"/>
+
+        <activity
+            android:theme="@style/UnityThemeSelector"
+            android:name="com.unity3d.player.UnityPlayerActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="fullUser"
+            android:extractNativeLibs="true"
+            android:configChanges="density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|touchscreen|uiMode"
+            android:hardwareAccelerated="false"
+            android:resizeableActivity="false">
+
+            <intent-filter>
+
+                <category android:name="android.intent.category.LAUNCHER"/>
+
+                <action android:name="android.intent.action.MAIN"/>
+
+            </intent-filter>
+
+            <meta-data
+                android:name="unityplayer.UnityActivity"
+                android:value="true"/>
+
+            <meta-data
+                android:name="notch_support"
+                android:value="true"/>
+
+        </activity>
+
+    </application>
+
+</manifest>
