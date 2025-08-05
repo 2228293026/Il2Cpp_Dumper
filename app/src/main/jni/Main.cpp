@@ -406,6 +406,23 @@ void DumpAssemblyInfoToFile() {
     }
 }
 
+void DumpBaseAddressToFile() {
+    uintptr_t base = GetIL2CPPBase();
+
+    std::string pkg = GetPackageName();
+    std::string baseDir = "/storage/emulated/0/Android/data/" + pkg + "/files";
+    std::string dumpDir = baseDir + "/dump";
+    EnsureDirExists(dumpDir);
+
+    // 单独存放基址的文件
+    std::string baseAddressPath = dumpDir + "/base_address.txt";
+    std::ofstream outFile(baseAddressPath);
+    if (outFile.is_open()) {
+        outFile << "0x" << std::hex << std::uppercase << base;
+        outFile.close();
+    }
+}
 void start() {
+    DumpBaseAddressToFile();
     DumpAssemblyInfoToFile();
 }
