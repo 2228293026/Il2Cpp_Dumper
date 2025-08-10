@@ -176,7 +176,7 @@ std::string GetMethodSignature(BNM::MethodBase method) {
     // 方法名
     std::string name = info->name;
 
-    // 参数列表（带参数名）
+    // 参数列表
     std::string params;
     for (int i = 0; i < info->parameters_count; ++i) {
         auto *paramType = info->parameters[i];
@@ -225,7 +225,7 @@ void DumpClassToFile(BNM::Class cls, std::ofstream &outFile, uintptr_t libBase) 
 
     outFile << "// " << clazz->image->name << std::endl;
     
-    // 处理枚举类型 - 完全按照要求的格式
+    // 处理枚举类型
    if (clazz->enumtype) {
         std::string baseType = GetEnumBaseType(cls);
         outFile << "public enum " << clazz->name << " : " << baseType << std::endl;
@@ -314,7 +314,6 @@ static std::string GetPackageName() {
     return std::string(buf);
 }
 
-// 确保目录存在
 static bool EnsureDirExists(const std::string &dir) {
     struct stat st {};
     if (stat(dir.c_str(), &st) != 0) {
@@ -335,7 +334,7 @@ std::vector<std::string> ReadDllList(const std::string& path) {
 
     std::string line;
     while (std::getline(inFile, line, ',')) {
-        // 去除空格
+        
         line.erase(line.find_last_not_of(" \n\r\t") + 1);
         if (!line.empty()) dlls.push_back(line);
     }
