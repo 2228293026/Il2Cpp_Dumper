@@ -26,3 +26,4 @@
 #include "BNM/UserSettings/Il2CppMethodNames.hpp"
 
 void start();
+uintptr_t RVA_to_FileOffset(uintptr_t rva);
