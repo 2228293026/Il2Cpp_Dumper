@@ -12,6 +12,8 @@
 #include <vector>
 #include <algorithm>
 #include "il2cpp-tabledefs.h"
+#include <android/log.h>
+#include <sys/stat.h>
 
 using namespace std;
 using namespace BNM;
@@ -123,7 +125,6 @@ const char* il2cpp_method_get_param_name_ptr(const MethodInfo* method, uint32_t 
 
 // 获取参数类型
 const Il2CppType* il2cpp_method_get_param_ptr(const MethodInfo* method, uint32_t index);
-
 
 static const char* (*il2cpp_get_param_name_fn)(const MethodInfo*, uint32_t) = nullptr;
 
@@ -285,10 +286,12 @@ void DumpClassToFile(BNM::Class cls, std::ofstream &outFile, uintptr_t libBase) 
             std::string signature = GetMethodSignature(method);
             uintptr_t rva = GetStaticMethodRVA(method.GetInfo());
             uintptr_t va = GetMethodVA(method.GetInfo());
+            uintptr_t fileOffset = RVA_to_FileOffset(rva);
 
             outFile << "\t" << signature << ";" << std::endl;
             outFile << "\t// VA: 0x" << std::hex << std::uppercase << va
-                    << " RVA: 0x" << rva << std::uppercase << std::endl;
+                    << " RVA: 0x" << rva 
+                    << " Offset: 0x" << fileOffset << std::uppercase << std::endl;
         }
         outFile << "}" << std::endl;
     }
@@ -299,10 +302,6 @@ void DumpClassToFile(BNM::Class cls, std::ofstream &outFile, uintptr_t libBase) 
     }
     outFile << std::endl;
 }
-
-#include <jni.h>
-#include <android/log.h>
-#include <sys/stat.h>
 
 // 获取当前进程包名（/proc/self/cmdline）
 static std::string GetPackageName() {
@@ -406,6 +405,22 @@ void DumpAssemblyInfoToFile() {
     }
 }
 
+uintptr_t RVA_to_FileOffset(uintptr_t rva) {
+    Dl_info info;
+    dladdr((void*)GetIL2CPPBase(), &info); // 获取模块信息
+    
+    Elf64_Ehdr *ehdr = (Elf64_Ehdr *)info.dli_fbase;
+    Elf64_Phdr *phdr = (Elf64_Phdr *)((char *)ehdr + ehdr->e_phoff);
+    
+    for (int i = 0; i < ehdr->e_phnum; i++) {
+        if (phdr[i].p_type == PT_LOAD) {
+            if (rva >= phdr[i].p_vaddr && rva < phdr[i].p_vaddr + phdr[i].p_memsz) {
+                return rva - phdr[i].p_vaddr + phdr[i].p_offset;
+            }
+        }
+    }
+    return 0; // 未找到
+}
 void DumpBaseAddressToFile() {
     uintptr_t base = GetIL2CPPBase();
 
