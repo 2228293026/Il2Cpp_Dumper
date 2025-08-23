@@ -25,7 +25,6 @@ using namespace BNM::Structures::Mono;
 using namespace BNM::Structures::Unity;
 using namespace BNM::IL2CPP;
 
-Image il2cpp;
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, [[maybe_unused]] void *reserved) {
     JNIEnv *env;
     vm->GetEnv((void **) &env, JNI_VERSION_1_6);
@@ -47,12 +46,6 @@ uintptr_t GetIL2CPPBase() {
     return base;
 }
 
-int32_t GetFieldConstantValue(BNM::FieldBase field) {
-    // 在BNM中，这可能不可用，需要自定义实现
-    // 这里使用偏移量作为回退
-    return static_cast<int32_t>(field.GetOffset());
-}
-
 std::string GetTypeName(BNM::Class type) {
     if (!type) return "unknown";
     
@@ -67,58 +60,53 @@ std::string GetTypeName(BNM::Class type) {
     return fullName;
 }
 
-// 获取枚举基础类型
+// 获取类的访问修饰符
+std::string GetClassAccessModifier(BNM::Class cls) {
+    if (!cls) return "private";
+    
+    auto clazz = cls.GetClass();
+    uint32_t flags = clazz->flags;
+    
+    if (flags & TYPE_ATTRIBUTE_PUBLIC) return "public";
+    else if (flags & TYPE_ATTRIBUTE_NOT_PUBLIC) return "private";
+    else if (flags & TYPE_ATTRIBUTE_NESTED_PUBLIC) return "public";
+    else if (flags & TYPE_ATTRIBUTE_NESTED_PRIVATE) return "private";
+    else if (flags & TYPE_ATTRIBUTE_NESTED_FAMILY) return "protected";
+    else if (flags & TYPE_ATTRIBUTE_NESTED_ASSEMBLY) return "internal";
+    else if (flags & TYPE_ATTRIBUTE_NESTED_FAM_AND_ASSEM) return "protected internal";
+    else if (flags & TYPE_ATTRIBUTE_NESTED_FAM_OR_ASSEM) return "protected internal";
+    
+    return "private"; // 默认
+}
+
+
 std::string GetEnumBaseType(BNM::Class enumClass) {
     if (!enumClass) return "int";
     
-    // 收集当前类定义的字段（排除继承）
+    // 查找 value__ 字段来确定基础类型
     auto fields = enumClass.GetFields();
-    vector<pair<int32_t, BNM::FieldBase>> enumFields;
-
     for (auto &field : fields) {
-        if (field.GetInfo()->name != std::string("value__") &&
-            field.GetInfo()->parent == enumClass) { // ⚠️ 只保留当前类定义的字段
-            int32_t value = GetFieldConstantValue(field);
-            enumFields.push_back({value, field});
+        auto *info = field.GetInfo();
+        if (info && string(info->name) == "value__") {
+            BNM::Class fieldTypeClass(info->type);
+            std::string typeName = GetTypeName(fieldTypeClass);
+            
+            // 简化类型名称
+            if (typeName == "Int32") return "int";
+            else if (typeName == "Byte") return "byte";
+            else if (typeName == "SByte") return "sbyte";
+            else if (typeName == "Int16") return "short";
+            else if (typeName == "UInt16") return "ushort";
+            else if (typeName == "UInt32") return "uint";
+            else if (typeName == "Int64") return "long";
+            else if (typeName == "UInt64") return "ulong";
+            else return typeName; // 返回原始类型名称
         }
     }
-    return "int";
+    
+    return "int"; // 默认
 }
 
-
-void DumpFieldToFile(BNM::FieldBase field, std::ofstream &outFile) {
-    if (!field.IsValid()) return;
-
-    auto *info = field.GetInfo();
-    auto *type = info->type;
-    BNM::Class fieldClass(type);
-
-    std::string typeName = GetTypeName(fieldClass);
-    std::string modifiers;
-
-    // 解析访问修饰符
-    uint16_t attrs = type->attrs;
-    if (attrs & FIELD_ATTRIBUTE_PUBLIC) modifiers += "public ";
-    else if (attrs & FIELD_ATTRIBUTE_PRIVATE) modifiers += "private ";
-    else if (attrs & FIELD_ATTRIBUTE_FAMILY) modifiers += "protected ";
-    else if (attrs & FIELD_ATTRIBUTE_ASSEMBLY) modifiers += "internal ";
-    else modifiers += "private "; // 默认 fallback
-
-    // 添加更多属性类型
-    if (attrs & FIELD_ATTRIBUTE_LITERAL) modifiers += "const ";
-    if (attrs & FIELD_ATTRIBUTE_INIT_ONLY) modifiers += "readonly ";
-    if (attrs & FIELD_ATTRIBUTE_STATIC) modifiers += "static ";
-    if (attrs & FIELD_ATTRIBUTE_NOT_SERIALIZED) modifiers += "[NonSerialized] ";
-
-    // 处理枚举类型
-    if (fieldClass.GetClass()->enumtype) {
-        outFile << "\t" << modifiers << GetEnumBaseType(fieldClass) << " " << info->name
-                << "; // enum: " << typeName << ", 0x" << std::hex << field.GetOffset() << std::endl;
-    } else {
-        outFile << "\t" << modifiers << typeName << " " << info->name
-                << "; // 0x" << std::hex << field.GetOffset() << std::endl;
-    }
-}
 
 // 获取参数名
 const char* il2cpp_method_get_param_name_ptr(const MethodInfo* method, uint32_t index);
@@ -176,7 +164,7 @@ std::string GetMethodSignature(BNM::MethodBase method) {
     // 方法名
     std::string name = info->name;
 
-    // 参数列表
+    // 参数列表（带参数名）
     std::string params;
     for (int i = 0; i < info->parameters_count; ++i) {
         auto *paramType = info->parameters[i];
@@ -189,7 +177,7 @@ std::string GetMethodSignature(BNM::MethodBase method) {
     return modifiers + returnType + " " + name + "(" + params + ")";
 }
 
-uintptr_t GetStaticMethodRVA(const BNM::IL2CPP::MethodInfo* method) {
+uintptr_t GetStaticMethodRVA(const MethodInfo* method) {
     if (!method || !method->methodPointer) return 0;
 
     uintptr_t runtimeAddr = (uintptr_t)method->methodPointer;
@@ -199,106 +187,188 @@ uintptr_t GetStaticMethodRVA(const BNM::IL2CPP::MethodInfo* method) {
     return runtimeAddr - runtimeBase;
 }
 
-uintptr_t GetMethodVA(const BNM::IL2CPP::MethodInfo* method) {
+uintptr_t GetMethodVA(const MethodInfo* method) {
     if (!method) return 0;
     return (uintptr_t)method->methodPointer;
 }
 
-// 按字段偏移量排序（用于枚举）
-bool CompareEnumFields(const BNM::FieldBase& a, const BNM::FieldBase& b) {
-    return a.GetOffset() < b.GetOffset();
+
+// 获取类的Il2CppClass地址（静态地址）
+uintptr_t GetClassStaticAddress(BNM::Class cls) {
+    if (!cls) return 0;
+    
+    // 直接获取Il2CppClass指针
+    auto clazz = cls.GetClass();
+    if (!clazz) return 0;
+    
+    // 返回类的静态地址
+    return reinterpret_cast<uintptr_t>(clazz);
 }
 
-bool CompareEnumValues(const pair<int32_t, BNM::FieldBase>& a, const pair<int32_t, BNM::FieldBase>& b) {
-    return a.first < b.first;
-}
-
-void DumpClassToFile(BNM::Class cls, std::ofstream &outFile, uintptr_t libBase) {
+void DumpClassToFile(BNM::Class cls, std::ofstream &outFile, uintptr_t libBase, int indent = 0, bool isNested = false) {
     if (!cls) return;
     auto clazz = cls.GetClass();
 
-    // 输出命名空间
+    std::string indentStr(indent, '\t');
     std::string namespaceName = clazz->namespaze ? clazz->namespaze : "";
-    if (!namespaceName.empty()) {
+
+    // 获取类的访问修饰符
+    std::string classAccess = GetClassAccessModifier(cls);
+
+    // 如果不是嵌套类，输出命名空间
+    if (!isNested && !namespaceName.empty()) {
         outFile << "namespace " << namespaceName << " {" << std::endl << std::endl;
+        // 增加缩进级别
+        indent++;
+        indentStr = std::string(indent, '\t');
     }
 
-    outFile << "// " << clazz->image->name << std::endl;
-    
-    // 处理枚举类型
-   if (clazz->enumtype) {
+    outFile << indentStr << "// " << clazz->image->name << std::endl;
+    outFile << indentStr << "// Class VA: 0x" << std::hex << std::uppercase << GetClassStaticAddress(cls) << std::endl;
+
+    if (clazz->enumtype) {
         std::string baseType = GetEnumBaseType(cls);
-        outFile << "public enum " << clazz->name << " : " << baseType << std::endl;
-        outFile << "{" << std::endl;
+        std::string enumAccess = classAccess;
+        if (isNested) {
+            // 嵌套枚举应该使用嵌套类的访问修饰符规则
+            uint32_t flags = clazz->flags;
+            if (flags & TYPE_ATTRIBUTE_NESTED_PUBLIC) enumAccess = "public";
+            else if (flags & TYPE_ATTRIBUTE_NESTED_PRIVATE) enumAccess = "private";
+            else if (flags & TYPE_ATTRIBUTE_NESTED_FAMILY) enumAccess = "protected";
+            else if (flags & TYPE_ATTRIBUTE_NESTED_ASSEMBLY) enumAccess = "internal";
+            else if (flags & TYPE_ATTRIBUTE_NESTED_FAM_AND_ASSEM) enumAccess = "protected internal";
+            else if (flags & TYPE_ATTRIBUTE_NESTED_FAM_OR_ASSEM) enumAccess = "protected internal";
+        }
+    
+        outFile << indentStr << enumAccess << " enum " << clazz->name << " : " << baseType << std::endl;
+        outFile << indentStr << "{" << std::endl;
         
-        // 收集所有字段
+        // 收集枚举字段
         auto fields = cls.GetFields();
         vector<BNM::FieldBase> enumFields;
-
         for (auto &field : fields) {
             auto *info = field.GetInfo();
             if (!info) continue;
-
             if (info->parent != clazz) continue;
             if (string(info->name) == "value__") continue;
-
             enumFields.push_back(field);
         }
-        //sort(enumFields.begin(), enumFields.end(), CompareEnumValues);
-        
+
         // 输出枚举成员
         for (size_t i = 0; i < enumFields.size(); ++i) {
             auto &field = enumFields[i];
             auto *info = field.GetInfo();
-
-            outFile << std::dec << "\t" << info->name << " = " << i;
-            if (i < enumFields.size() - 1) outFile << ",";
             
-            outFile << endl;
+            
+            outFile << indentStr << "\t" << info->name << " = " << i;
+            if (i < enumFields.size() - 1) outFile << ",";
+            outFile << std::endl;
         }
+        outFile << indentStr << "}" << std::endl;
+    } else {
+        // 添加类的其他修饰符（abstract, sealed等）
+        std::string classModifiers = classAccess;
+        uint32_t flags = clazz->flags;
+        if (flags & TYPE_ATTRIBUTE_ABSTRACT && flags & TYPE_ATTRIBUTE_SEALED) classModifiers += " static";
+        else if (flags & TYPE_ATTRIBUTE_ABSTRACT) classModifiers += " abstract";
+        else if (flags & TYPE_ATTRIBUTE_SEALED) classModifiers += " sealed";
         
-        outFile << "}" << endl;
-    }
-    // 普通类
-   else {
-        outFile << "class " << clazz->name;
+        outFile << indentStr << classModifiers << " class " << clazz->name;
         auto parent = cls.GetParent();
         if (parent) {
             outFile << " : " << GetTypeName(parent);
         }
         outFile << std::endl;
-        outFile << "{" << std::endl;
+        outFile << indentStr << "{" << std::endl;
 
-        // Fields
-        outFile << "\t// Fields" << std::endl;
+        // 增加类内部的缩进级别
+        std::string classIndentStr = indentStr + "\t";
+        
+        // 输出字段
+        outFile << classIndentStr << "// Fields" << std::endl;
         auto fields = cls.GetFields();
         for (auto &field : fields) {
             if (field.GetInfo()->parent != clazz) continue;
-            DumpFieldToFile(field, outFile);
+            
+            // 创建字段缩进字符串
+            std::string fieldIndentStr = classIndentStr;
+            if (!isNested && !namespaceName.empty()) {
+                fieldIndentStr += "";
+            }
+            
+            auto *info = field.GetInfo();
+            auto *type = info->type;
+            BNM::Class fieldClass(type);
+            
+            std::string typeName = GetTypeName(fieldClass);
+            std::string modifiers;
+            
+            // 解析访问修饰符
+            uint16_t attrs = type->attrs;
+            if (attrs & FIELD_ATTRIBUTE_PUBLIC) modifiers += "public ";
+            else if (attrs & FIELD_ATTRIBUTE_PRIVATE) modifiers += "private ";
+            else if (attrs & FIELD_ATTRIBUTE_FAMILY) modifiers += "protected ";
+            else if (attrs & FIELD_ATTRIBUTE_ASSEMBLY) modifiers += "internal ";
+            else modifiers += "private ";
+            
+            // 添加更多属性类型
+            if (attrs & FIELD_ATTRIBUTE_LITERAL) modifiers += "const ";
+            if (attrs & FIELD_ATTRIBUTE_INIT_ONLY) modifiers += "readonly ";
+            if (attrs & FIELD_ATTRIBUTE_STATIC) modifiers += "static ";
+            if (attrs & FIELD_ATTRIBUTE_NOT_SERIALIZED) modifiers += "[NonSerialized] ";
+            
+            // 处理枚举类型
+            if (fieldClass.GetClass()->enumtype) {
+                outFile << fieldIndentStr << modifiers << GetEnumBaseType(fieldClass) << " " << info->name
+                        << "; // enum: " << typeName << ", 0x" << std::hex << field.GetOffset() << std::endl;
+            } else {
+                outFile << fieldIndentStr << modifiers << typeName << " " << info->name
+                        << "; // 0x" << std::hex << field.GetOffset() << std::endl;
+            }
         }
 
-        // Methods
-        outFile << "\n\t// Methods" << std::endl;
+        // 输出方法
+        outFile << std::endl << classIndentStr << "// Methods" << std::endl;
         auto methods = cls.GetMethods();
         for (auto &method : methods) {
             if (method.GetInfo()->klass != clazz) continue;
             if (!method.IsValid()) continue;
+            
+            // 创建方法缩进字符串
+            std::string methodIndentStr = classIndentStr;
+            if (!isNested && !namespaceName.empty()) {
+                methodIndentStr += "";
+            }
+            
             std::string signature = GetMethodSignature(method);
             uintptr_t rva = GetStaticMethodRVA(method.GetInfo());
             uintptr_t va = GetMethodVA(method.GetInfo());
             uintptr_t fileOffset = RVA_to_FileOffset(rva);
 
-            outFile << "\t" << signature << ";" << std::endl;
-            outFile << "\t// VA: 0x" << std::hex << std::uppercase << va
+            outFile << methodIndentStr << signature << ";" << std::endl;
+            outFile << methodIndentStr << "// VA: 0x" << std::hex << std::uppercase << va
                     << " RVA: 0x" << rva 
                     << " Offset: 0x" << fileOffset << std::uppercase << std::endl;
         }
-        outFile << "}" << std::endl;
+
+        // 输出嵌套类型（包括嵌套枚举）
+        if (clazz->nestedTypes && clazz->nested_type_count > 0) {
+            outFile << std::endl << classIndentStr << "// Nested types" << std::endl;
+            for (int i = 0; i < clazz->nested_type_count; ++i) {
+                BNM::Class nestedClass(clazz->nestedTypes[i]);
+                DumpClassToFile(nestedClass, outFile, libBase, indent + 1, true);
+            }
+        }
+
+        outFile << indentStr << "}" << std::endl;
     }
-    
-    // 关闭命名空间
-    if (!namespaceName.empty()) {
-        outFile << "} // namespace " << namespaceName << std::endl;
+
+    // 如果不是嵌套类且命名空间非空，关闭命名空间
+    if (!isNested && !namespaceName.empty()) {
+        // 恢复原始缩进级别
+        indent--;
+        indentStr = std::string(indent, '\t');
+        outFile << indentStr << "} // namespace " << namespaceName << std::endl;
     }
     outFile << std::endl;
 }
@@ -314,6 +384,7 @@ static std::string GetPackageName() {
     return std::string(buf);
 }
 
+// 确保目录存在
 static bool EnsureDirExists(const std::string &dir) {
     struct stat st {};
     if (stat(dir.c_str(), &st) != 0) {
@@ -334,7 +405,7 @@ std::vector<std::string> ReadDllList(const std::string& path) {
 
     std::string line;
     while (std::getline(inFile, line, ',')) {
-        
+        // 去除空格
         line.erase(line.find_last_not_of(" \n\r\t") + 1);
         if (!line.empty()) dlls.push_back(line);
     }
@@ -389,13 +460,14 @@ void DumpAssemblyInfoToFile() {
         std::unordered_map<std::string, std::vector<BNM::Class>> namespaceMap;
         for (auto &cls : classes) {
             auto clazz = cls.GetClass();
+            if (clazz->declaringType) continue; // 跳过嵌套类
             std::string ns = clazz->namespaze ? clazz->namespaze : "";
             namespaceMap[ns].push_back(cls);
         }
 
         for (auto &[ns, classesInNs] : namespaceMap) {
             for (auto &cls : classesInNs) {
-                DumpClassToFile(cls, outFile, libBase);
+                DumpClassToFile(cls, outFile, libBase, 0, false); // 添加参数
             }
         }
 
