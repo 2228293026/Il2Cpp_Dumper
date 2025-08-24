@@ -88,7 +88,7 @@ std::string GetEnumBaseType(BNM::Class enumClass) {
     for (auto &field : fields) {
         auto *info = field.GetInfo();
         if (info && string(info->name) == "value__") {
-            BNM::Class fieldTypeClass(info->type);
+            Class fieldTypeClass(info->type);
             std::string typeName = GetTypeName(fieldTypeClass);
             
             // 简化类型名称
@@ -107,14 +107,9 @@ std::string GetEnumBaseType(BNM::Class enumClass) {
     return "int"; // 默认
 }
 
-
-// 获取参数名
-const char* il2cpp_method_get_param_name_ptr(const MethodInfo* method, uint32_t index);
-
-// 获取参数类型
-const Il2CppType* il2cpp_method_get_param_ptr(const MethodInfo* method, uint32_t index);
-
 static const char* (*il2cpp_get_param_name_fn)(const MethodInfo*, uint32_t) = nullptr;
+
+static void (*il2cpp_field_static_get_value_fn)(void*, void*) = nullptr;
 
 void InitIL2CPPExports() {
     if (il2cpp_get_param_name_fn) return;
@@ -124,10 +119,12 @@ void InitIL2CPPExports() {
 
     il2cpp_get_param_name_fn = (const char* (*)(const MethodInfo*, uint32_t))
         dlsym(handle, "il2cpp_method_get_param_name");
+    if (!il2cpp_field_static_get_value_fn)
+        il2cpp_field_static_get_value_fn = (void (*)(void*, void*))
+            dlsym(handle, "il2cpp_field_static_get_value");
 }
 
 std::string GetParameterName(const MethodInfo* method, int index) {
-    InitIL2CPPExports();
     if (!il2cpp_get_param_name_fn) {
         return "arg" + std::to_string(index); // fallback
     }
@@ -258,16 +255,18 @@ void DumpClassToFile(BNM::Class cls, std::ofstream &outFile, uintptr_t libBase, 
         for (size_t i = 0; i < enumFields.size(); ++i) {
             auto &field = enumFields[i];
             auto *info = field.GetInfo();
-    
-            std::ios_base::fmtflags savedFlags = outFile.flags();
-    
+            int64_t enumValue = 0;
+            if (il2cpp_field_static_get_value_fn) {
+                il2cpp_field_static_get_value_fn((void*)info, &enumValue);
+            } else {
+                // 回退：使用顺序索引
+                enumValue = i;
+            }
             // 使用十进制格式输出枚举值
-            outFile << indentStr << "\t" << info->name << " = " << std::dec << i;
+            outFile << indentStr << "\t" << info->name << " = " << std::dec << enumValue;
             if (i < enumFields.size() - 1) outFile << ",";
             outFile << std::endl;
     
-            // 恢复格式状态
-            outFile.flags(savedFlags);
         }
         outFile << indentStr << "}" << std::endl;
     } else {
@@ -483,19 +482,52 @@ void DumpAssemblyInfoToFile() {
 
 uintptr_t RVA_to_FileOffset(uintptr_t rva) {
     Dl_info info;
-    dladdr((void*)GetIL2CPPBase(), &info); // 获取模块信息
+    if (dladdr((void*)GetIL2CPPBase(), &info) == 0) {
+        __android_log_print(ANDROID_LOG_ERROR, "DUMP", "dladdr failed");
+        return 0;
+    }
     
-    Elf64_Ehdr *ehdr = (Elf64_Ehdr *)info.dli_fbase;
-    Elf64_Phdr *phdr = (Elf64_Phdr *)((char *)ehdr + ehdr->e_phoff);
+    // 检查ELF魔数以确定是32位还是64位
+    unsigned char *base = (unsigned char *)info.dli_fbase;
+    if (memcmp(base, ELFMAG, SELFMAG) != 0) {
+        __android_log_print(ANDROID_LOG_ERROR, "DUMP", "Not a valid ELF file");
+        return 0;
+    }
     
-    for (int i = 0; i < ehdr->e_phnum; i++) {
-        if (phdr[i].p_type == PT_LOAD) {
-            if (rva >= phdr[i].p_vaddr && rva < phdr[i].p_vaddr + phdr[i].p_memsz) {
-                return rva - phdr[i].p_vaddr + phdr[i].p_offset;
+    int elf_class = base[EI_CLASS];
+    
+    if (elf_class == ELFCLASS64) {
+        Elf64_Ehdr *ehdr = (Elf64_Ehdr *)base;
+        Elf64_Phdr *phdr = (Elf64_Phdr *)(base + ehdr->e_phoff);
+        
+        for (int i = 0; i < ehdr->e_phnum; i++) {
+            if (phdr[i].p_type == PT_LOAD) {
+                uintptr_t seg_start = phdr[i].p_vaddr;
+                uintptr_t seg_end = seg_start + phdr[i].p_memsz;
+                
+                if (rva >= seg_start && rva < seg_end) {
+                    return (rva - seg_start) + phdr[i].p_offset;
+                }
+            }
+        }
+    } else if (elf_class == ELFCLASS32) {
+        Elf32_Ehdr *ehdr = (Elf32_Ehdr *)base;
+        Elf32_Phdr *phdr = (Elf32_Phdr *)(base + ehdr->e_phoff);
+        
+        for (int i = 0; i < ehdr->e_phnum; i++) {
+            if (phdr[i].p_type == PT_LOAD) {
+                uintptr_t seg_start = phdr[i].p_vaddr;
+                uintptr_t seg_end = seg_start + phdr[i].p_memsz;
+                
+                if (rva >= seg_start && rva < seg_end) {
+                    return (rva - seg_start) + phdr[i].p_offset;
+                }
             }
         }
     }
-    return 0; // 未找到
+    
+    __android_log_print(ANDROID_LOG_WARN, "DUMP", "RVA 0x%lx not found in any segment", rva);
+    return 0;
 }
 void DumpBaseAddressToFile() {
     uintptr_t base = GetIL2CPPBase();
@@ -514,6 +546,7 @@ void DumpBaseAddressToFile() {
     }
 }
 void start() {
+    InitIL2CPPExports();
     DumpBaseAddressToFile();
     DumpAssemblyInfoToFile();
 }
