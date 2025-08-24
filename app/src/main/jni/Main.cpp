@@ -1,4 +1,3 @@
-
 #include <jni.h>
 #include "universe.h"
 #include <sys/mman.h>
@@ -152,27 +151,45 @@ std::string GetMethodSignature(BNM::MethodBase method) {
 
     // 访问修饰符
     uint16_t flags = info->flags;
-    if (flags & METHOD_ATTRIBUTE_PUBLIC) modifiers += "public ";
-    else if (flags & METHOD_ATTRIBUTE_PRIVATE) modifiers += "private ";
-    else if (flags & METHOD_ATTRIBUTE_FAMILY) modifiers += "protected ";
-    else if (flags & METHOD_ATTRIBUTE_ASSEM) modifiers += "internal ";
-    else modifiers += "private ";
-
-    // 添加更多方法属性
-    if (flags & METHOD_ATTRIBUTE_STATIC) modifiers += "static ";
-    if (flags & METHOD_ATTRIBUTE_VIRTUAL)
-    {
-        if ((flags & METHOD_ATTRIBUTE_VTABLE_LAYOUT_MASK) == METHOD_ATTRIBUTE_NEW_SLOT)
-            modifiers += "virtual ";
-        else
-            modifiers += "override ";
+    auto access = flags & METHOD_ATTRIBUTE_MEMBER_ACCESS_MASK;
+    switch (access) {
+        case METHOD_ATTRIBUTE_PRIVATE:
+            modifiers += "private ";
+            break;
+        case METHOD_ATTRIBUTE_PUBLIC:
+            modifiers += "public ";
+            break;
+        case METHOD_ATTRIBUTE_FAMILY:
+            modifiers += "protected ";
+            break;
+        case METHOD_ATTRIBUTE_ASSEM:
+        case METHOD_ATTRIBUTE_FAM_AND_ASSEM:
+            modifiers += "internal ";
+            break;
+        case METHOD_ATTRIBUTE_FAM_OR_ASSEM:
+            modifiers += "protected internal ";
+            break;
     }
+
+    // 添加更多
+    if (flags & METHOD_ATTRIBUTE_STATIC) modifiers += "static ";
     if (flags & METHOD_ATTRIBUTE_ABSTRACT)
     {
         modifiers += "abstract ";
         if ((flags & METHOD_ATTRIBUTE_VTABLE_LAYOUT_MASK) == METHOD_ATTRIBUTE_REUSE_SLOT)
             modifiers += "override ";
+    } else if (flags & METHOD_ATTRIBUTE_FINAL) {
+        if ((flags & METHOD_ATTRIBUTE_VTABLE_LAYOUT_MASK) == METHOD_ATTRIBUTE_REUSE_SLOT) {
+            modifiers += "sealed override ";
+        }
+    } else if (flags & METHOD_ATTRIBUTE_VIRTUAL) {
+        if ((flags & METHOD_ATTRIBUTE_VTABLE_LAYOUT_MASK) == METHOD_ATTRIBUTE_NEW_SLOT) {
+            modifiers += "virtual ";
+        } else {
+            modifiers += "override ";
+        }
     }
+    
     if (flags & METHOD_ATTRIBUTE_FINAL) modifiers += "sealed ";
     if (flags & METHOD_ATTRIBUTE_HIDE_BY_SIG) modifiers += "new ";
 
