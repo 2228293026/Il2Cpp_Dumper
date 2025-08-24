@@ -1,3 +1,4 @@
+
 #include <jni.h>
 #include "universe.h"
 #include <sys/mman.h>
@@ -76,7 +77,7 @@ std::string GetClassAccessModifier(BNM::Class cls) {
     else if (flags & TYPE_ATTRIBUTE_NESTED_FAM_AND_ASSEM) return "protected internal";
     else if (flags & TYPE_ATTRIBUTE_NESTED_FAM_OR_ASSEM) return "protected internal";
     
-    return "private"; // 默认
+    return "private";
 }
 
 
@@ -111,6 +112,10 @@ static const char* (*il2cpp_get_param_name_fn)(const MethodInfo*, uint32_t) = nu
 
 static void (*il2cpp_field_static_get_value_fn)(void*, void*) = nullptr;
 
+static bool (*il2cpp_class_is_valuetype_fn)(const Il2CppClass *) = nullptr;
+
+static uint16_t (*il2cpp_param_get_attrs_fn)(const Il2CppType*) = nullptr;
+
 void InitIL2CPPExports() {
     if (il2cpp_get_param_name_fn) return;
 
@@ -122,6 +127,12 @@ void InitIL2CPPExports() {
     if (!il2cpp_field_static_get_value_fn)
         il2cpp_field_static_get_value_fn = (void (*)(void*, void*))
             dlsym(handle, "il2cpp_field_static_get_value");
+    if (!il2cpp_class_is_valuetype_fn)
+        il2cpp_class_is_valuetype_fn = (bool (*)(const Il2CppClass *))
+            dlsym(handle, "il2cpp_class_is_valuetype");
+    if (!il2cpp_param_get_attrs_fn)
+        il2cpp_param_get_attrs_fn = (uint16_t (*)(const Il2CppType*))
+            dlsym(handle, "il2cpp_param_get_attrs");
 }
 
 std::string GetParameterName(const MethodInfo* method, int index) {
@@ -132,7 +143,6 @@ std::string GetParameterName(const MethodInfo* method, int index) {
     const char* name = il2cpp_get_param_name_fn(method, index);
     return name ? name : ("arg" + std::to_string(index));
 }
-
 
 std::string GetMethodSignature(BNM::MethodBase method) {
     if (!method.IsValid()) return "unknown()";
@@ -150,13 +160,31 @@ std::string GetMethodSignature(BNM::MethodBase method) {
 
     // 添加更多方法属性
     if (flags & METHOD_ATTRIBUTE_STATIC) modifiers += "static ";
-    if (flags & METHOD_ATTRIBUTE_VIRTUAL) modifiers += "virtual ";
-    if (flags & METHOD_ATTRIBUTE_ABSTRACT) modifiers += "abstract ";
+    if (flags & METHOD_ATTRIBUTE_VIRTUAL)
+    {
+        if ((flags & METHOD_ATTRIBUTE_VTABLE_LAYOUT_MASK) == METHOD_ATTRIBUTE_NEW_SLOT)
+            modifiers += "virtual ";
+        else
+            modifiers += "override ";
+    }
+    if (flags & METHOD_ATTRIBUTE_ABSTRACT)
+    {
+        modifiers += "abstract ";
+        if ((flags & METHOD_ATTRIBUTE_VTABLE_LAYOUT_MASK) == METHOD_ATTRIBUTE_REUSE_SLOT)
+            modifiers += "override ";
+    }
     if (flags & METHOD_ATTRIBUTE_FINAL) modifiers += "sealed ";
     if (flags & METHOD_ATTRIBUTE_HIDE_BY_SIG) modifiers += "new ";
 
+    if (flags & METHOD_ATTRIBUTE_PINVOKE_IMPL) modifiers += "extern ";
+
     // 返回类型
     std::string returnType = GetTypeName(BNM::Class(info->return_type));
+    
+    // 检查返回类型是否为引用
+    if (info->return_type->byref) {
+        returnType = "ref " + returnType;
+    }
 
     // 方法名
     std::string name = info->name;
@@ -167,7 +195,34 @@ std::string GetMethodSignature(BNM::MethodBase method) {
         auto *paramType = info->parameters[i];
         std::string paramName = GetParameterName(info, i);
         
-        params += GetTypeName(BNM::Class(paramType)) + " " + paramName;
+        // 处理参数修饰符 (ref, out, in)
+        std::string paramModifier;
+        uint16_t paramAttrs = 0;
+        
+        if (il2cpp_param_get_attrs_fn) {
+            paramAttrs = il2cpp_param_get_attrs_fn(paramType);
+        } else {
+            paramAttrs = paramType->attrs;
+        }
+        
+        if (paramType->byref) {
+            if (paramAttrs & PARAM_ATTRIBUTE_OUT && !(paramAttrs & PARAM_ATTRIBUTE_IN)) {
+                paramModifier = "out ";
+            } else if (paramAttrs & PARAM_ATTRIBUTE_IN && !(paramAttrs & PARAM_ATTRIBUTE_OUT)) {
+                paramModifier = "in ";
+            } else {
+                paramModifier = "ref ";
+            }
+        } else {
+            if (paramAttrs & PARAM_ATTRIBUTE_IN) {
+                paramModifier = "[In] ";
+            }
+            if (paramAttrs & PARAM_ATTRIBUTE_OUT) {
+                paramModifier = "[Out] ";
+            }
+        }
+        
+        params += paramModifier + GetTypeName(BNM::Class(paramType)) + " " + paramName;
         if (i < info->parameters_count - 1) params += ", ";
     }
 
@@ -190,7 +245,7 @@ uintptr_t GetMethodVA(const MethodInfo* method) {
 }
 
 
-// 获取类的Il2CppClass地址（静态地址）
+// 获取类的Il2CppClass地址（地址）
 uintptr_t GetClassStaticAddress(BNM::Class cls) {
     if (!cls) return 0;
     
@@ -271,13 +326,21 @@ void DumpClassToFile(BNM::Class cls, std::ofstream &outFile, uintptr_t libBase, 
         outFile << indentStr << "}" << std::endl;
     } else {
         // 添加类的其他修饰符（abstract, sealed等）
+        auto is_valuetype = il2cpp_class_is_valuetype_fn ? il2cpp_class_is_valuetype_fn(clazz) : false;
         std::string classModifiers = classAccess;
         uint32_t flags = clazz->flags;
         if (flags & TYPE_ATTRIBUTE_ABSTRACT && flags & TYPE_ATTRIBUTE_SEALED) classModifiers += " static";
         else if (flags & TYPE_ATTRIBUTE_ABSTRACT) classModifiers += " abstract";
-        else if (flags & TYPE_ATTRIBUTE_SEALED) classModifiers += " sealed";
-        
-        outFile << indentStr << classModifiers << " class " << clazz->name;
+        else if (flags & TYPE_ATTRIBUTE_SEALED && !is_valuetype) classModifiers += " sealed";
+        string abc = " class ";
+        if (flags & TYPE_ATTRIBUTE_INTERFACE) {
+            abc = " interface ";
+        } else if (is_valuetype) {
+            abc = " struct ";
+        } else {
+            abc = " class ";
+        }
+        outFile << indentStr << classModifiers << abc << clazz->name;
         auto parent = cls.GetParent();
         if (parent) {
             outFile << " : " << GetTypeName(parent);
@@ -529,6 +592,7 @@ uintptr_t RVA_to_FileOffset(uintptr_t rva) {
     __android_log_print(ANDROID_LOG_WARN, "DUMP", "RVA 0x%lx not found in any segment", rva);
     return 0;
 }
+
 void DumpBaseAddressToFile() {
     uintptr_t base = GetIL2CPPBase();
 
