@@ -258,11 +258,16 @@ void DumpClassToFile(BNM::Class cls, std::ofstream &outFile, uintptr_t libBase, 
         for (size_t i = 0; i < enumFields.size(); ++i) {
             auto &field = enumFields[i];
             auto *info = field.GetInfo();
-            
-            
-            outFile << indentStr << "\t" << info->name << " = " << i;
+    
+            std::ios_base::fmtflags savedFlags = outFile.flags();
+    
+            // 使用十进制格式输出枚举值
+            outFile << indentStr << "\t" << info->name << " = " << std::dec << i;
             if (i < enumFields.size() - 1) outFile << ",";
             outFile << std::endl;
+    
+            // 恢复格式状态
+            outFile.flags(savedFlags);
         }
         outFile << indentStr << "}" << std::endl;
     } else {
