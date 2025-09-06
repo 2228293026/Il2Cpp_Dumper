@@ -379,11 +379,23 @@ void DumpClassToFile(BNM::Class cls, std::ofstream &outFile, uintptr_t libBase, 
             if (!isNested && !namespaceName.empty()) {
                 fieldIndentStr += "";
             }
-            
             auto *info = field.GetInfo();
+            std::string fieldName = info->name;
+            if (fieldName.find("k__BackingField") != std::string::npos || (fieldName.find("<") != std::string::npos && fieldName.find(">") != std::string::npos)) {
+        
+                // 提取属性名
+                std::string propName;
+                size_t start = fieldName.find('<');
+                size_t end = fieldName.find('>');
+                if (start != std::string::npos && end != std::string::npos && end > start + 1) {
+                    propName = fieldName.substr(start + 1, end - start - 1);
+                } else {
+                    propName = fieldName; //  fallback
+                }
+        
+            // 获取字段类型
             auto *type = info->type;
             BNM::Class fieldClass(type);
-            
             std::string typeName = GetTypeName(fieldClass);
             std::string modifiers;
             
@@ -400,14 +412,41 @@ void DumpClassToFile(BNM::Class cls, std::ofstream &outFile, uintptr_t libBase, 
             if (attrs & FIELD_ATTRIBUTE_INIT_ONLY) modifiers += "readonly ";
             if (attrs & FIELD_ATTRIBUTE_STATIC) modifiers += "static ";
             if (attrs & FIELD_ATTRIBUTE_NOT_SERIALIZED) modifiers += "[NonSerialized] ";
+        
+            // 输出为属性格式
+            outFile << fieldIndentStr << "// " << modifiers << typeName << " " << propName << " { get; set; }" << std::endl;
+            outFile << fieldIndentStr << modifiers << typeName << " " << fieldName << "; // 0x" 
+                << std::hex << field.GetOffset() << std::endl;
+ 
+        } else {
+                auto *info = field.GetInfo();
+                auto *type = info->type;
+                BNM::Class fieldClass(type);
+                std::string typeName = GetTypeName(fieldClass);
+                std::string modifiers;
             
-            // 处理枚举类型
-            if (fieldClass.GetClass()->enumtype) {
-                outFile << fieldIndentStr << modifiers << GetEnumBaseType(fieldClass) << " " << info->name
-                        << "; // enum: " << typeName << ", 0x" << std::hex << field.GetOffset() << std::endl;
-            } else {
-                outFile << fieldIndentStr << modifiers << typeName << " " << info->name
-                        << "; // 0x" << std::hex << field.GetOffset() << std::endl;
+                // 解析访问修饰符
+                uint16_t attrs = type->attrs;
+                if (attrs & FIELD_ATTRIBUTE_PUBLIC) modifiers += "public ";
+                else if (attrs & FIELD_ATTRIBUTE_PRIVATE) modifiers += "private ";
+                else if (attrs & FIELD_ATTRIBUTE_FAMILY) modifiers += "protected ";
+                else if (attrs & FIELD_ATTRIBUTE_ASSEMBLY) modifiers += "internal ";
+                else modifiers += "private ";
+            
+                // 添加更多属性类型
+                if (attrs & FIELD_ATTRIBUTE_LITERAL) modifiers += "const ";
+                if (attrs & FIELD_ATTRIBUTE_INIT_ONLY) modifiers += "readonly ";
+                if (attrs & FIELD_ATTRIBUTE_STATIC) modifiers += "static ";
+                if (attrs & FIELD_ATTRIBUTE_NOT_SERIALIZED) modifiers += "[NonSerialized] ";
+            
+                // 处理枚举类型
+                if (fieldClass.GetClass()->enumtype) {
+                    outFile << fieldIndentStr << modifiers << GetEnumBaseType(fieldClass) << " " << info->name
+                            << "; // enum: " << typeName << ", 0x" << std::hex << field.GetOffset() << std::endl;
+                } else {
+                    outFile << fieldIndentStr << modifiers << typeName << " " << info->name
+                            << "; // 0x" << std::hex << field.GetOffset() << std::endl;
+                }
             }
         }
 
